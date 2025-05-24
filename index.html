@@ -1,0 +1,167 @@
+﻿<!DOCTYPE html>
+<html lang="pl">
+<head>
+  <meta charset="UTF-8">
+  <title>Platforma Załadunku i Rozładunku</title>
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.3/dist/leaflet.css" />
+  <style>
+    body { font-family: Arial, sans-serif; }
+    table {
+      width: 100%;
+      border-collapse: collapse;
+    }
+    th, td {
+      border: 1px solid #ccc;
+      padding: 6px;
+      text-align: center;
+    }
+    .pilne { background-color: #ffe6e6; }
+    .status-aktualne { background-color: #a5f3a1 !important; font-weight: bold; }
+    .status-nieaktualne { background-color: #f9a1a1 !important; font-weight: bold; }
+    .status-nieznane { background-color: #fff7a1 !important; font-weight: bold; }
+    .date-time-group input { width: 45%; display: inline-block; margin: 2px 1%; }
+    textarea { width: 100%; height: 60px; resize: vertical; }
+    input[list] { width: 100%; }
+    #map { height: 400px; margin-top: 20px; }
+  </style>
+</head>
+<body>
+
+  <h1>Platforma Załadunku i Rozładunku</h1>
+  <button onclick="dodajWiersz()">➕ Dodaj nowy wiersz</button>
+  <button onclick="sortujTabele()">↕ Sortuj według daty</button>
+  <button onclick="pokazTrase()">📍 Pokaż trasę</button>
+
+  <datalist id="lokalizacje"></datalist>
+
+  <table id="tabela">
+    <thead>
+      <tr>
+        <th>PILNE</th>
+        <th>Załadunek</th>
+        <th>Data załadunku (od-do)</th>
+        <th>Godzina załadunku (od-do)</th>
+        <th>Rozładunek</th>
+        <th>Data rozładunku (od-do)</th>
+        <th>Godzina rozładunku (od-do)</th>
+        <th>Sposób załadunku</th>
+        <th>Potwierdź aktualność</th>
+        <th>Uwagi</th>
+        <th>Kilometry</th>
+        <th>Stawka</th>
+        <th>Akcje</th>
+      </tr>
+    </thead>
+    <tbody></tbody>
+  </table>
+
+  <div id="map"></div>
+
+  <script src="https://unpkg.com/leaflet@1.9.3/dist/leaflet.js"></script>
+  <script>
+    const tabela = document.getElementById("tabela").getElementsByTagName("tbody")[0];
+
+    function dodajWiersz() {
+      const wiersz = tabela.insertRow();
+      wiersz.classList.add("pilne");
+      wiersz.innerHTML = `
+        <td><input type="checkbox" checked onclick="togglePilne(this)"></td>
+        <td><input type="text" list="lokalizacje" placeholder="Miasto (kod)"></td>
+        <td class="date-time-group"><input type="date"> <input type="date"></td>
+        <td class="date-time-group"><input type="time"> <input type="time"></td>
+        <td><input type="text" list="lokalizacje" placeholder="Miasto (kod)"></td>
+        <td class="date-time-group"><input type="date"> <input type="date"></td>
+        <td class="date-time-group"><input type="time"> <input type="time"></td>
+        <td><select><option value="tyłem">Tyłem</option><option value="bokiem">Bokiem</option><option value="górą">Górą</option><option value="bok_góra">Bok + Góra</option><option value="auto_winda">Auto z windą</option><option value="inne">Inne</option></select></td>
+        <td><select onchange="zmienAktualnosc(this)"><option value="">-- wybierz --</option><option value="aktualne">Aktualne</option><option value="nieaktualne">Nieaktualne</option><option value="nieznane">???</option></select></td>
+        <td><textarea placeholder="Uwagi"></textarea></td>
+        <td class="km-cell">0 km</td>
+        <td><input type="text" placeholder="Stawka"></td>
+        <td><button onclick="usunWiersz(this)">❌ Usuń</button></td>
+      `;
+    }
+
+    function usunWiersz(btn) {
+      if (confirm("Czy na pewno chcesz usunąć ten wiersz?")) {
+        tabela.deleteRow(btn.closest("tr").rowIndex - 1);
+      }
+    }
+
+    function zmienAktualnosc(select) {
+      const td = select.parentNode;
+      td.classList.remove("status-aktualne", "status-nieaktualne", "status-nieznane");
+      if (select.value === "aktualne") td.classList.add("status-aktualne");
+      else if (select.value === "nieaktualne") td.classList.add("status-nieaktualne");
+      else if (select.value === "nieznane") td.classList.add("status-nieznane");
+    }
+
+    function togglePilne(checkbox) {
+      const row = checkbox.closest("tr");
+      row.classList.toggle("pilne", checkbox.checked);
+      const tbody = tabela;
+      tbody.removeChild(row);
+      checkbox.checked ? tbody.insertBefore(row, tbody.firstChild) : tbody.appendChild(row);
+    }
+
+    function sortujTabele() {
+      const rows = Array.from(tabela.rows);
+      rows.sort((a, b) => {
+        const aDate = new Date(a.cells[2].querySelector("input").value);
+        const bDate = new Date(b.cells[2].querySelector("input").value);
+        return aDate - bDate;
+      });
+      rows.forEach(row => tabela.appendChild(row));
+    }
+
+    fetch('kodypolska.json')
+      .then(response => {
+        if (!response.ok) throw new Error("Nie udało się załadować pliku JSON");
+        return response.json();
+      })
+      .then(data => {
+        const datalist = document.getElementById("lokalizacje");
+        data.forEach(entry => {
+          const option = document.createElement("option");
+          option.value = `${entry.place_name} (${entry.postal_code})`;
+          datalist.appendChild(option);
+        });
+      })
+      .catch(error => console.error("Błąd ładowania lokalizacji:", error));
+
+    const map = L.map('map').setView([52.1, 19.4], 6);
+    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+      attribution: '&copy; OpenStreetMap'
+    }).addTo(map);
+    let routeLayer;
+
+    function extractCity(val) {
+      return val.includes('(') ? val.split('(')[0].trim() : val;
+    }
+
+    async function pokazTrase() {
+      const row = tabela.rows[0];
+      if (!row) return alert("Dodaj wiersz z lokalizacjami!");
+
+      const start = extractCity(row.cells[1].querySelector("input").value);
+      const end = extractCity(row.cells[4].querySelector("input").value);
+      if (!start || !end) return alert("Wpisz miejsca załadunku i rozładunku.");
+
+      const getCoords = async (query) => {
+        const response = await fetch(`https://nominatim.openstreetmap.org/search?format=json&q=${encodeURIComponent(query)}`);
+        const data = await response.json();
+        return data.length > 0 ? [parseFloat(data[0].lat), parseFloat(data[0].lon)] : null;
+      };
+
+      const startCoords = await getCoords(start);
+      const endCoords = await getCoords(end);
+      if (!startCoords || !endCoords) return alert("Nie znaleziono lokalizacji!");
+
+      const url = `https://router.project-osrm.org/route/v1/driving/${startCoords[1]},${startCoords[0]};${endCoords[1]},${endCoords[0]}?overview=full&geometries=geojson`;
+
+      const routeData = await fetch(url).then(r => r.json());
+      if (routeLayer) map.removeLayer(routeLayer);
+      routeLayer = L.geoJSON(routeData.routes[0].geometry).addTo(map);
+      map.fitBounds(routeLayer.getBounds());
+
+      const distanceKm = (routeData.routes[0].distance / 1000).toFixed(2);
+      row.querySe
